@@ -15,6 +15,7 @@ warnings.filterwarnings('ignore')
 
 class AIService:
     def __init__(self):
+        """Initialize the AI Service with model and scaler"""
         self.model = None
         self.scaler = StandardScaler()
         self.is_trained = False
@@ -62,7 +63,7 @@ class AIService:
         self.is_trained = False
         logger.info("🆕 New model initialized (untrained)")
     
-    def _calculate_features(self, data: pd.DataFrame) -> Optional[np.ndarray]:
+    def _calculate_features(self, data: pd.DataFrame) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Calculate technical features for prediction"""
         try:
             if data.empty or len(data) < 50:
@@ -71,7 +72,7 @@ class AIService:
             
             features = pd.DataFrame(index=data.index)
             
-            # Price features
+            # === PRICE FEATURES ===
             features['close'] = data['Close']
             features['high'] = data['High']
             features['low'] = data['Low']
@@ -82,20 +83,21 @@ class AIService:
             features['close_high_ratio'] = data['Close'] / data['High']
             features['close_low_ratio'] = data['Close'] / data['Low']
             
-            # Returns (percentage changes)
+            # === RETURNS ===
             for period in [1, 5, 10, 20]:
                 features[f'return_{period}d'] = data['Close'].pct_change(periods=period) * 100
             
-            # Technical indicators - using try/except for each
+            # === TECHNICAL INDICATORS ===
+            
+            # RSI
             try:
-                # RSI
                 features['rsi'] = ta.momentum.RSIIndicator(data['Close'], window=14).rsi()
             except Exception as e:
                 logger.debug(f"RSI calculation error: {e}")
                 features['rsi'] = 50
             
+            # MACD
             try:
-                # MACD
                 macd = ta.trend.MACD(data['Close'])
                 features['macd'] = macd.macd()
                 features['macd_signal'] = macd.macd_signal()
@@ -106,8 +108,8 @@ class AIService:
                 features['macd_signal'] = 0
                 features['macd_diff'] = 0
             
+            # Moving Averages
             try:
-                # Moving Averages
                 for period in [20, 50, 200]:
                     if len(data) >= period:
                         features[f'sma_{period}'] = ta.trend.sma_indicator(data['Close'], window=period)
@@ -118,8 +120,17 @@ class AIService:
                 for period in [20, 50, 200]:
                     features[f'sma_{period}'] = data['Close'].mean()
             
+            # Exponential Moving Averages
             try:
-                # Bollinger Bands
+                for period in [12, 26]:
+                    features[f'ema_{period}'] = ta.trend.ema_indicator(data['Close'], window=period)
+            except Exception as e:
+                logger.debug(f"EMA calculation error: {e}")
+                for period in [12, 26]:
+                    features[f'ema_{period}'] = data['Close'].mean()
+            
+            # Bollinger Bands
+            try:
                 bb = ta.volatility.BollingerBands(data['Close'], window=20, window_dev=2)
                 features['bb_high'] = bb.bollinger_hband()
                 features['bb_low'] = bb.bollinger_lband()
@@ -134,8 +145,8 @@ class AIService:
                 features['bb_width'] = 0
                 features['bb_position'] = 0.5
             
+            # Volume indicators
             try:
-                # Volume indicators
                 features['volume_sma'] = data['Volume'].rolling(window=20).mean()
                 features['volume_ratio'] = data['Volume'] / (features['volume_sma'] + 1e-8)
                 features['volume_trend'] = data['Volume'].rolling(window=10).mean() / (data['Volume'].rolling(window=30).mean() + 1e-8)
@@ -145,8 +156,8 @@ class AIService:
                 features['volume_ratio'] = 1
                 features['volume_trend'] = 1
             
+            # Momentum
             try:
-                # Momentum
                 features['momentum'] = ta.momentum.roc(data['Close'], window=12)
                 features['stoch_k'] = ta.momentum.stochrsi_k(data['Close'], window=14, smooth1=3)
                 features['stoch_d'] = ta.momentum.stochrsi_d(data['Close'], window=14, smooth1=3, smooth2=3)
@@ -156,14 +167,21 @@ class AIService:
                 features['stoch_k'] = 50
                 features['stoch_d'] = 50
             
+            # Volatility
             try:
-                # Volatility
                 features['volatility'] = data['Close'].rolling(window=20).std()
                 features['volatility_ratio'] = features['volatility'] / (features['volatility'].rolling(window=60).mean() + 1e-8)
             except Exception as e:
                 logger.debug(f"Volatility calculation error: {e}")
                 features['volatility'] = data['Close'].std()
                 features['volatility_ratio'] = 1
+            
+            # Average True Range (ATR)
+            try:
+                features['atr'] = ta.volatility.average_true_range(data['High'], data['Low'], data['Close'], window=14)
+            except Exception as e:
+                logger.debug(f"ATR calculation error: {e}")
+                features['atr'] = data['Close'].std()
             
             # Price position relative to moving averages
             for period in [20, 50]:
@@ -173,7 +191,8 @@ class AIService:
             # Trend strength
             features['trend_strength'] = abs(features['macd'] - features['macd_signal']) / (features['volatility'] + 1e-8)
             
-            # Target variable (next day return)
+            # === TARGET VARIABLE ===
+            # Next day return
             features['target'] = data['Close'].shift(-1) / data['Close'] - 1
             
             # Drop NaN values
@@ -202,10 +221,10 @@ class AIService:
             logger.error(f"❌ Error calculating features: {e}")
             return None
     
-    def train_model(self, symbols: List[str] = None, force_retrain: bool = False):
+    def train_model(self, symbols: List[str] = None, force_retrain: bool = False) -> bool:
         """Train the model on historical data"""
         if symbols is None:
-            symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM']
+            symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'VTI', 'SPY']
         
         if self.is_trained and not force_retrain:
             logger.info("ℹ️ Model already trained, use force_retrain=True to retrain")
@@ -299,6 +318,10 @@ class AIService:
             
             X, _ = result
             
+            # Check if we have features
+            if len(X) == 0:
+                return self._get_default_prediction()
+            
             # Scale features
             X_scaled = self.scaler.transform(X)
             
@@ -324,16 +347,25 @@ class AIService:
             if abs(predicted_return) < 2:
                 time_horizon = "1 Week"
             
+            # Get recommendation
+            recommendation = self._get_recommendation(predicted_return, confidence)
+            
+            # Get score
+            score = self._calculate_score(predicted_return, confidence, recommendation)
+            
             return {
                 'price': float(predicted_price),
                 'current_price': float(current_price),
                 'predicted_return': float(predicted_return),
                 'confidence': float(confidence),
-                'recommendation': self._get_recommendation(predicted_return, confidence),
+                'score': float(score),
+                'recommendation': recommendation,
                 'target_low': float(target_low),
                 'target_high': float(target_high),
                 'time_horizon': time_horizon,
-                'model_version': '2.0.0'
+                'model_version': '2.0.0',
+                'symbol': symbol,
+                'timestamp': datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -347,11 +379,14 @@ class AIService:
             'current_price': 0,
             'predicted_return': 0,
             'confidence': 0,
+            'score': 50,
             'recommendation': 'HOLD',
             'target_low': 0,
             'target_high': 0,
             'time_horizon': 'N/A',
-            'model_version': '2.0.0'
+            'model_version': '2.0.0',
+            'symbol': 'N/A',
+            'timestamp': datetime.now().isoformat()
         }
     
     def _calculate_confidence(self, features: np.ndarray) -> float:
@@ -377,7 +412,11 @@ class AIService:
             std_pred = np.std(predictions)
             
             # Higher confidence when predictions are consistent (low std)
-            confidence = 1 - (std_pred / (abs(mean_pred) + 0.01))
+            if abs(mean_pred) > 0.01:
+                confidence = 1 - (std_pred / (abs(mean_pred) + 0.01))
+            else:
+                confidence = 1 - std_pred
+            
             confidence = np.clip(confidence, 0, 1)
             
             # Additional confidence factors
@@ -411,6 +450,10 @@ class AIService:
                 return "STRONG SELL"
             elif predicted_return < -8:
                 return "SELL"
+            elif predicted_return > 3:
+                return "OUTPERFORM"
+            elif predicted_return < -3:
+                return "UNDERPERFORM"
         
         # Moderate signals
         if confidence > 0.6:
@@ -426,37 +469,41 @@ class AIService:
         # Neutral
         return "HOLD"
     
+    def _calculate_score(self, predicted_return: float, confidence: float, recommendation: str) -> float:
+        """Calculate AI score (0-100)"""
+        try:
+            # Base score from confidence
+            score = confidence * 100
+            
+            # Adjust based on prediction
+            if predicted_return > 0:
+                score += min(predicted_return * 2, 20)
+            else:
+                score += max(predicted_return * 2, -20)
+            
+            # Recommendation bonus
+            rec_bonus = {
+                'STRONG BUY': 15,
+                'BUY': 10,
+                'OUTPERFORM': 5,
+                'HOLD': 0,
+                'UNDERPERFORM': -5,
+                'SELL': -10,
+                'STRONG SELL': -15
+            }
+            score += rec_bonus.get(recommendation, 0)
+            
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculating score: {e}")
+            return 50
+    
     def get_score(self, symbol: str) -> float:
         """Get AI score for a stock (0-100)"""
         try:
             prediction = self.predict(symbol)
-            
-            if prediction['confidence'] > 0.3:
-                # Base score from confidence
-                score = prediction['confidence'] * 100
-                
-                # Adjust based on prediction
-                if prediction['predicted_return'] > 0:
-                    score += min(prediction['predicted_return'] * 2, 20)
-                else:
-                    score += max(prediction['predicted_return'] * 2, -20)
-                
-                # Recommendation bonus
-                rec_bonus = {
-                    'STRONG BUY': 15,
-                    'BUY': 10,
-                    'OUTPERFORM': 5,
-                    'HOLD': 0,
-                    'UNDERPERFORM': -5,
-                    'SELL': -10,
-                    'STRONG SELL': -15
-                }
-                score += rec_bonus.get(prediction['recommendation'], 0)
-                
-                return max(0, min(100, score))
-            
-            return 50
-            
+            return prediction.get('score', 50)
         except Exception as e:
             logger.error(f"❌ Error getting score for {symbol}: {e}")
             return 50
@@ -464,21 +511,23 @@ class AIService:
     def get_recommendations(self, symbols: Optional[List[str]] = None) -> List[Dict]:
         """Get recommendations for multiple stocks"""
         if symbols is None:
-            symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM']
+            symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'VTI', 'SPY']
         
         recommendations = []
         for symbol in symbols:
             try:
                 pred = self.predict(symbol)
-                recommendations.append({
-                    'Symbol': symbol,
-                    'Price': pred.get('current_price', 0),
-                    'Target': pred.get('price', 0),
-                    'Return %': pred.get('predicted_return', 0),
-                    'Confidence': pred.get('confidence', 0) * 100,
-                    'Action': pred.get('recommendation', 'HOLD'),
-                    'Time Horizon': pred.get('time_horizon', 'N/A')
-                })
+                if pred['price'] > 0:
+                    recommendations.append({
+                        'Symbol': symbol,
+                        'Price': pred.get('current_price', 0),
+                        'Target': pred.get('price', 0),
+                        'Return %': pred.get('predicted_return', 0),
+                        'Confidence': pred.get('confidence', 0) * 100,
+                        'Score': pred.get('score', 50),
+                        'Action': pred.get('recommendation', 'HOLD'),
+                        'Time Horizon': pred.get('time_horizon', 'N/A')
+                    })
             except Exception as e:
                 logger.error(f"❌ Error getting recommendation for {symbol}: {e}")
                 continue
@@ -501,6 +550,19 @@ class AIService:
             logger.error(f"❌ Error getting overall confidence: {e}")
             return 50.0
     
+    def get_best_picks(self, limit: int = 5) -> List[Dict]:
+        """Get the best AI picks"""
+        try:
+            recommendations = self.get_recommendations()
+            # Filter for BUY recommendations
+            buys = [r for r in recommendations if 'BUY' in r['Action']]
+            # Sort by score
+            buys.sort(key=lambda x: x['Score'], reverse=True)
+            return buys[:limit]
+        except Exception as e:
+            logger.error(f"❌ Error getting best picks: {e}")
+            return []
+    
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the current model"""
         info = {
@@ -508,23 +570,38 @@ class AIService:
             'model_type': 'RandomForestRegressor',
             'feature_count': len(self.feature_columns) if self.feature_columns else 0,
             'model_path': self.model_path,
-            'scaler_path': self.scaler_path
+            'scaler_path': self.scaler_path,
+            'features_path': self.features_path
         }
         
         if self.is_trained and hasattr(self.model, 'n_estimators'):
             info.update({
                 'n_estimators': self.model.n_estimators,
                 'max_depth': self.model.max_depth,
+                'min_samples_split': self.model.min_samples_split,
                 'n_features': self.model.n_features_in_ if hasattr(self.model, 'n_features_in_') else 0
             })
+            
+            # Calculate feature importance if available
+            if hasattr(self.model, 'feature_importances_') and self.feature_columns:
+                importances = self.model.feature_importances_
+                top_features = sorted(
+                    zip(self.feature_columns[:len(importances)], importances),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:10]
+                info['top_features'] = top_features
         
         return info
     
-    def save_model(self, path: str = None):
+    def save_model(self, path: str = None) -> bool:
         """Save the current model to disk"""
         try:
             if path is None:
                 path = self.model_path
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             
             joblib.dump(self.model, path)
             joblib.dump(self.scaler, self.scaler_path)
@@ -538,9 +615,96 @@ class AIService:
         except Exception as e:
             logger.error(f"❌ Error saving model: {e}")
             return False
+    
+    def load_model_from_path(self, model_path: str, scaler_path: str = None, features_path: str = None) -> bool:
+        """Load model from custom paths"""
+        try:
+            self.model = joblib.load(model_path)
+            
+            if scaler_path and os.path.exists(scaler_path):
+                self.scaler = joblib.load(scaler_path)
+            
+            if features_path and os.path.exists(features_path):
+                with open(features_path, 'rb') as f:
+                    self.feature_columns = pickle.load(f)
+            
+            self.is_trained = True
+            logger.info(f"✅ Model loaded from {model_path}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error loading model from path: {e}")
+            return False
+    
+    def evaluate_model(self, test_symbols: List[str] = None) -> Dict[str, Any]:
+        """Evaluate model performance on test data"""
+        if test_symbols is None:
+            test_symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN']
+        
+        if not self.is_trained:
+            logger.warning("⚠️ Model not trained, cannot evaluate")
+            return {'error': 'Model not trained'}
+        
+        results = {
+            'predictions': [],
+            'accuracy': 0,
+            'mean_error': 0,
+            'rmse': 0
+        }
+        
+        errors = []
+        directions_correct = 0
+        total = 0
+        
+        for symbol in test_symbols:
+            try:
+                stock = yf.Ticker(symbol)
+                data = stock.history(period="1y")
+                
+                if data.empty:
+                    continue
+                
+                # Split into train and test
+                train_data = data.iloc[:-30]  # Last 30 days for testing
+                test_data = data.iloc[-30:]
+                
+                # Train on historical data
+                train_result = self._calculate_features(train_data)
+                if train_result is None:
+                    continue
+                
+                X_train, y_train = train_result
+                X_train_scaled = self.scaler.fit_transform(X_train)
+                self.model.fit(X_train_scaled, y_train)
+                
+                # Test on recent data
+                test_result = self._calculate_features(test_data)
+                if test_result is None:
+                    continue
+                
+                X_test, y_test = test_result
+                X_test_scaled = self.scaler.transform(X_test)
+                predictions = self.model.predict(X_test_scaled)
+                
+                # Calculate metrics
+                for i, (pred, actual) in enumerate(zip(predictions, y_test)):
+                    errors.append(abs(pred - actual))
+                    if (pred > 0 and actual > 0) or (pred < 0 and actual < 0):
+                        directions_correct += 1
+                    total += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Error evaluating {symbol}: {e}")
+                continue
+        
+        if total > 0:
+            results['accuracy'] = directions_correct / total
+            results['mean_error'] = np.mean(errors)
+            results['rmse'] = np.sqrt(np.mean(np.array(errors)**2))
+        
+        return results
 
 
-# Singleton instance for use across the application
+# === SINGLETON INSTANCE ===
 _ai_service_instance = None
 
 def get_ai_service() -> AIService:
@@ -549,3 +713,43 @@ def get_ai_service() -> AIService:
     if _ai_service_instance is None:
         _ai_service_instance = AIService()
     return _ai_service_instance
+
+
+# === TEST FUNCTIONS ===
+def test_ai_service():
+    """Test the AI service functionality"""
+    logger.info("🧪 Testing AI Service...")
+    
+    # Get service
+    ai_service = get_ai_service()
+    
+    # Train model
+    logger.info("Training model...")
+    ai_service.train_model()
+    
+    # Test prediction
+    logger.info("Testing prediction...")
+    prediction = ai_service.predict('AAPL')
+    logger.info(f"Prediction: {prediction}")
+    
+    # Test recommendations
+    logger.info("Testing recommendations...")
+    recommendations = ai_service.get_recommendations(['AAPL', 'GOOGL', 'MSFT'])
+    logger.info(f"Recommendations: {recommendations}")
+    
+    # Get model info
+    logger.info("Getting model info...")
+    info = ai_service.get_model_info()
+    logger.info(f"Model info: {info}")
+    
+    # Evaluate model
+    logger.info("Evaluating model...")
+    evaluation = ai_service.evaluate_model()
+    logger.info(f"Evaluation: {evaluation}")
+    
+    logger.info("✅ AI Service test complete")
+
+
+if __name__ == "__main__":
+    # Run test if executed directly
+    test_ai_service()
