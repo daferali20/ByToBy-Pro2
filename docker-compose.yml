@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: bytoby_postgres
+    environment:
+      POSTGRES_USER: bytoby_user
+      POSTGRES_PASSWORD: bytoby_password
+      POSTGRES_DB: bytoby_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - bytoby_network
+
+  redis:
+    image: redis:7
+    container_name: bytoby_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - bytoby_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: bytoby_backend
+    environment:
+      DATABASE_URL: postgresql://bytoby_user:bytoby_password@postgres:5432/bytoby_db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    networks:
+      - bytoby_network
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: bytoby_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app/frontend
+    networks:
+      - bytoby_network
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: bytoby_celery
+    environment:
+      DATABASE_URL: postgresql://bytoby_user:bytoby_password@postgres:5432/bytoby_db
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    networks:
+      - bytoby_network
+    command: celery -A app.celery worker --loglevel=info
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: bytoby_scheduler
+    environment:
+      DATABASE_URL: postgresql://bytoby_user:bytoby_password@postgres:5432/bytoby_db
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    networks:
+      - bytoby_network
+    command: python scheduler/scheduler.py
+
+networks:
+  bytoby_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
