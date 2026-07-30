@@ -1,44 +1,46 @@
 # Core
-streamlit==1.29.0
-streamlit-extras==0.3.6
+streamlit==1.38.0
+streamlit-extras==0.4.2
 streamlit-lottie==0.0.5
 
 # Data Processing
-pandas==2.1.3
-numpy==1.26.2
-yfinance==0.2.35
+pandas==2.2.2
+numpy==1.26.4
+yfinance==0.2.40
 alpha-vantage==2.3.1
 ta==0.10.2
 
 # Visualization
-plotly==5.18.0
-matplotlib==3.8.2
-seaborn==0.13.0
-altair==5.2.0
+plotly==5.22.0
+matplotlib==3.9.2
+seaborn==0.13.2
+altair==5.4.0
 streamlit-aggrid==0.3.4
 
-# Machine Learning
-scikit-learn==1.3.2
-tensorflow==2.13.0
-xgboost==2.0.1
-transformers==4.36.0
+# Machine Learning (إصدارات متوافقة مع Python 3.14)
+scikit-learn==1.5.0
+xgboost==2.1.0
+transformers==4.44.0
+
+# إزالة TensorFlow واستبداله بـ PyTorch أو استخدام CPU-only
+# tensorflow-cpu==2.17.0  # اختياري
 
 # Database
-sqlalchemy==2.0.23
+sqlalchemy==2.0.31
 psycopg2-binary==2.9.9
-redis==5.0.1
+redis==5.0.7
 
 # Utilities
-python-dotenv==1.0.0
-requests==2.31.0
-beautifulsoup4==4.12.2
+python-dotenv==1.0.1
+requests==2.32.3
+beautifulsoup4==4.12.3
 nltk==3.8.1
-textblob==0.17.1
+textblob==0.18.0
 plotly-express==0.4.1
 
 # Async
 asyncio==3.4.3
-aiohttp==3.9.1
+aiohttp==3.10.5
 
 # Logging
 loguru==0.7.2
