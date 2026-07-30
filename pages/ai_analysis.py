@@ -181,4 +181,64 @@ def show_ai_analysis(services):
         with st.spinner(f"Analyzing {selected_symbol}..."):
             # Get detailed data
             info = services['stock'].get_company_info(selected_symbol)
-            indicators = services['stock'].calculate_indic
+            indicators = services['stock'].calculate_indicators(selected_symbol)
+            prediction = services['ai'].predict(selected_symbol)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Price chart with predictions
+                data = services['data'].get_historical_data(selected_symbol, period="3mo")
+                if not data.empty:
+                    fig = go.Figure()
+                    
+                    # Candlestick chart
+                    fig.add_trace(go.Candlestick(
+                        x=data.index,
+                        open=data['Open'],
+                        high=data['High'],
+                        low=data['Low'],
+                        close=data['Close'],
+                        name='Price'
+                    ))
+                    
+                    # Prediction markers
+                    if prediction:
+                        fig.add_trace(go.Scatter(
+                            x=[data.index[-1], data.index[-1] + pd.Timedelta(days=30)],
+                            y=[data['Close'].iloc[-1], prediction.get('price', 0)],
+                            mode='lines+markers',
+                            name='AI Prediction',
+                            line=dict(color='#fdcb6e', dash='dash', width=2),
+                            marker=dict(size=10, color='#fdcb6e')
+                        ))
+                    
+                    fig.update_layout(
+                        template='plotly_dark',
+                        height=500,
+                        xaxis_rangeslider_visible=False
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("#### 📊 Analysis Summary")
+                
+                # Show key metrics
+                metrics = {
+                    'Current Price': f"${prediction.get('current_price', 0):.2f}",
+                    'AI Target': f"${prediction.get('price', 0):.2f}",
+                    'Potential Return': f"{prediction.get('predicted_return', 0):.1f}%",
+                    'Confidence': f"{prediction.get('confidence', 0)*100:.1f}%",
+                    'Recommendation': prediction.get('recommendation', 'HOLD'),
+                    'RSI': f"{indicators.get('rsi', 50):.1f}"
+                }
+                
+                for key, value in metrics.items():
+                    color = '#00b894' if 'BUY' in value or 'STRONG BUY' in value else '#ff6b6b' if 'SELL' in value else '#fdcb6e' if 'HOLD' in value else '#888'
+                    st.markdown(f"""
+                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <span style="color: #888;">{key}</span>
+                        <span style="color: {color}; font-weight: bold;">{value}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
