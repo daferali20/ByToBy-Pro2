@@ -1,93 +1,142 @@
-import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
-from loguru import logger
+import streamlit as st
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import yfinance as yf
+from streamlit_option_menu import option_menu
+from streamlit_extras.metric_cards import style_metric_cards
+from streamlit_extras.colored_header import colored_header
+from streamlit_extras.stylable_container import stylable_container
+import warnings
+warnings.filterwarnings('ignore')
 
-from backend.api import (
-    auth_router,
-    stock_router,
-    portfolio_router,
-    screener_router,
-    ai_router,
-    alerts_router
+# Import backend modules
+from backend.data_service import DataService
+from backend.stock_service import StockService
+from backend.screener_service import ScreenerService
+from backend.portfolio_service import PortfolioService
+from backend.ai_service import AIService
+from backend.news_service import NewsService
+from backend.utils import format_currency, format_percentage, get_stock_emoji
+
+# Page configuration
+st.set_page_config(
+    page_title="ByToBy Pro2 AI - منصة تحليل الأسهم الذكية",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-from backend.services import DataService, CacheService
-from database import DatabaseManager
-from scheduler import SchedulerManager
 
-# Configure logging
-logger.add("logs/app_{time}.log", rotation="500 MB", retention="10 days")
+# Load custom CSS
+def load_css():
+    with open('assets/css/style.css', 'r') as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-class ByToByApp:
-    def __init__(self):
-        self.app = FastAPI(
-            title="ByToBy Pro2 AI",
-            description="Advanced AI Stock Analysis Platform",
-            version="2.0.0",
-            lifespan=self.lifespan
-        )
-        self.setup_middleware()
-        self.setup_routers()
-        self.db_manager = DatabaseManager()
-        self.cache_service = CacheService()
-        self.data_service = DataService()
-        self.scheduler = SchedulerManager()
+load_css()
 
-    def setup_middleware(self):
-        """Setup CORS and other middleware"""
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],  # Configure for production
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-
-    def setup_routers(self):
-        """Register API routers"""
-        self.app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
-        self.app.include_router(stock_router, prefix="/api/stocks", tags=["Stocks"])
-        self.app.include_router(portfolio_router, prefix="/api/portfolio", tags=["Portfolio"])
-        self.app.include_router(screener_router, prefix="/api/screener", tags=["Screener"])
-        self.app.include_router(ai_router, prefix="/api/ai", tags=["AI Analysis"])
-        self.app.include_router(alerts_router, prefix="/api/alerts", tags=["Alerts"])
-
-    @asynccontextmanager
-    async def lifespan(self, app: FastAPI):
-        """Lifespan context manager for startup/shutdown events"""
-        # Startup
-        logger.info("Starting ByToBy Pro2 AI Platform...")
-        await self.db_manager.connect()
-        await self.cache_service.connect()
-        await self.scheduler.start()
-        logger.info("Platform started successfully")
-        
-        yield
-        
-        # Shutdown
-        logger.info("Shutting down ByToBy Pro2 AI Platform...")
-        await self.scheduler.stop()
-        await self.cache_service.disconnect()
-        await self.db_manager.disconnect()
-        logger.info("Platform shutdown complete")
-
-app = ByToByApp().app
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
+# Initialize services
+@st.cache_resource
+def init_services():
     return {
-        "status": "healthy",
-        "version": "2.0.0",
-        "services": {
-            "database": await app.db_manager.health_check(),
-            "cache": await app.cache_service.health_check(),
-            "scheduler": app.scheduler.health_check()
-        }
+        'data': DataService(),
+        'stock': StockService(),
+        'screener': ScreenerService(),
+        'portfolio': PortfolioService(),
+        'ai': AIService(),
+        'news': NewsService()
     }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+services = init_services()
+
+# Session state initialization
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user' not in st.session_state:
+    st.session_state.user = None
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = {}
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA']
+if 'alerts' not in st.session_state:
+    st.session_state.alerts = []
+
+# Sidebar
+with st.sidebar:
+    st.image("https://via.placeholder.com/200x60/0a0e17/00b4d8?text=ByToBy+Pro2", use_column_width=True)
+    
+    st.markdown("---")
+    
+    # Navigation
+    selected = option_menu(
+        menu_title=None,
+        options=["📊 Dashboard", "🔍 Screener", "💼 Portfolio", "🤖 AI Analysis", "🔔 Alerts", "📰 News"],
+        icons=["house", "search", "briefcase", "robot", "bell", "newspaper"],
+        menu_icon="cast",
+        default_index=0,
+        styles={
+            "container": {"padding": "0!important", "background-color": "transparent"},
+            "icon": {"color": "#00b4d8", "font-size": "20px"},
+            "nav-link": {"font-size": "16px", "text-align": "left", "margin": "0px", "padding": "10px"},
+            "nav-link-selected": {"background-color": "#00b4d8", "color": "white"},
+        }
+    )
+    
+    st.markdown("---")
+    
+    # Market status
+    market_status = services['data'].get_market_status()
+    st.markdown(f"""
+    <div style="background: rgba(0, 180, 216, 0.1); padding: 10px; border-radius: 10px; border-left: 3px solid #00b4d8;">
+        <small style="color: #888;">Market Status</small><br>
+        <span style="color: {'#00b894' if market_status['is_open'] else '#ff6b6b'}; font-weight: bold;">
+            {market_status['status']}
+        </span><br>
+        <small style="color: #888;">{market_status['time']}</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Quick watchlist
+    st.markdown("### ⭐ Watchlist")
+    for symbol in st.session_state.watchlist[:5]:
+        price = services['data'].get_current_price(symbol)
+        change = services['data'].get_price_change(symbol)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"**{symbol}**")
+        with col2:
+            color = "#00b894" if change >= 0 else "#ff6b6b"
+            st.markdown(f"<span style='color: {color};'>{format_currency(price)}</span>", unsafe_allow_html=True)
+
+# Main content
+if selected == "📊 Dashboard":
+    from pages.dashboard import show_dashboard
+    show_dashboard(services)
+elif selected == "🔍 Screener":
+    from pages.screener import show_screener
+    show_screener(services)
+elif selected == "💼 Portfolio":
+    from pages.portfolio import show_portfolio
+    show_portfolio(services)
+elif selected == "🤖 AI Analysis":
+    from pages.ai_analysis import show_ai_analysis
+    show_ai_analysis(services)
+elif selected == "🔔 Alerts":
+    from pages.alerts import show_alerts
+    show_alerts(services)
+elif selected == "📰 News":
+    from pages.news import show_news
+    show_news(services)
+
+# Footer
+st.markdown("---")
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown("© 2024 ByToBy Pro2 AI")
+with col2:
+    st.markdown("[Privacy Policy] | [Terms of Service]")
+with col3:
+    st.markdown("v2.0.0")
